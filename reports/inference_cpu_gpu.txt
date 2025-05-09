@@ -1,0 +1,4 @@
+CPU mean infer-time: 123.85 ms
+GPU mean infer-time: 29.39 ms
+Free RAM (bytes): 123356520448
+GPU allocated (bytes): 527999488
