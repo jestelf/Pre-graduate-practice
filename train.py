@@ -10,10 +10,7 @@ from sklearn.model_selection import train_test_split
 import librosa
 from tqdm import tqdm
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {DEVICE}")
-print(f"CUDA available: {torch.cuda.is_available()}")
-
+# ----------------------------- Гиперпараметры -----------------------------
 SAMPLE_RATE = 16000
 N_MELS = 80
 PATCH_TIME = 4
@@ -27,10 +24,13 @@ NUM_SEGMENT_LAYERS = 2
 BATCH_SIZE = 4
 EPOCHS = 10
 LR = 1e-4
-NUM_CLASSES = 3
+NUM_CLASSES = 3    # 0=original,1=synth_same_text,2=synth_random_text
 LAMBDA_ATTR = 1.0
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# -------------------------------------------------------------------
+# Логирование
+# -------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s | %(levelname)s | %(message)s',
@@ -38,129 +38,95 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def compute_mel_spectrogram(audio_path, sample_rate=SAMPLE_RATE, n_mels=N_MELS):
-    y, sr = librosa.load(audio_path, sr=sample_rate)
+# ========================= 1. Предобработка =========================
+def compute_mel_spectrogram(path, sample_rate=SAMPLE_RATE, n_mels=N_MELS):
+    y, sr = librosa.load(path, sr=sample_rate)
     mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=n_mels, power=2.0)
-    mel_db = librosa.power_to_db(mel, ref=np.max)
-    mel_db = torch.tensor(mel_db, dtype=torch.float)
-    return mel_db.transpose(0, 1)
+    db = librosa.power_to_db(mel, ref=np.max)
+    return torch.tensor(db.T, dtype=torch.float)  # [time, mel_bins]
 
 def compute_artifact_map(mel_spec, kernel_size=9):
-    x = mel_spec.unsqueeze(0)
-    x = x.transpose(1, 2)
+    x = mel_spec.unsqueeze(0).transpose(1,2)  # [1, mel, time]
     pad = kernel_size // 2
     smooth = F.avg_pool1d(x, kernel_size=kernel_size, stride=1, padding=pad)
     art = x - smooth
-    art = art.transpose(1, 2).squeeze(0)
-    return art
+    return art.transpose(1,2).squeeze(0)       # [time, mel]
 
+# ========================= 2. Датасет =========================
 class MultiTaskDataset(Dataset):
-    def __init__(self, audio_paths, class_ids):
-        super().__init__()
-        self.audio_paths = audio_paths
-        self.class_ids = class_ids
-        self.bin_labels = [0 if c==0 else 1 for c in class_ids]
-
+    def __init__(self, paths, class_ids):
+        self.paths = paths
+        self.multi = class_ids
+        self.bin = [0 if c==0 else 1 for c in class_ids]
     def __len__(self):
-        return len(self.audio_paths)
-
-    def __getitem__(self, idx):
-        path = self.audio_paths[idx]
-        multi_label = self.class_ids[idx]
-        bin_label = self.bin_labels[idx]
+        return len(self.paths)
+    def __getitem__(self, i):
+        path = self.paths[i]
         mel = compute_mel_spectrogram(path)
         art = compute_artifact_map(mel)
-        return {
-            'mel': mel,
-            'art': art,
-            'bin_label': bin_label,
-            'multi_label': multi_label
-        }
+        return (
+            mel,
+            art,
+            torch.tensor(self.bin[i], dtype=torch.float),
+            torch.tensor(self.multi[i], dtype=torch.long)
+        )
 
 def pad_collate_fn(batch):
-    mels = [item['mel'] for item in batch]
-    arts = [item['art'] for item in batch]
-    bin_labels = [item['bin_label'] for item in batch]
-    multi_labels = [item['multi_label'] for item in batch]
-    max_len = max(m.shape[0] for m in mels)
+    mels, arts, bins, multis = zip(*batch)
+    max_t = max(m.shape[0] for m in mels)
+    def pad(x):
+        return F.pad(x, (0,0,0,max_t-x.shape[0]))
+    mels = torch.stack([pad(m) for m in mels])
+    arts = torch.stack([pad(a) for a in arts])
+    bins = torch.stack(bins)
+    multis = torch.stack(multis)
+    return mels, arts, bins, multis
 
-    def pad_time(x, max_len):
-        T, M = x.shape
-        pad_T = max_len - T
-        if pad_T > 0:
-            x = F.pad(x.unsqueeze(0), (0, 0, 0, pad_T)).squeeze(0)
-        return x
-
-    mels_padded = [pad_time(m, max_len) for m in mels]
-    arts_padded = [pad_time(a, max_len) for a in arts]
-    mels_tensor = torch.stack(mels_padded, dim=0)
-    arts_tensor = torch.stack(arts_padded, dim=0)
-    bin_labels = torch.tensor(bin_labels, dtype=torch.long)
-    multi_labels = torch.tensor(multi_labels, dtype=torch.long)
-
-    return mels_tensor, arts_tensor, bin_labels, multi_labels
-
+# ========================= 3. Архитектура =========================
 class PatchEmbed(nn.Module):
-    def __init__(self, d_model, patch_time, patch_freq):
+    def __init__(self, d_model, pt, pf):
         super().__init__()
-        self.patch_time = patch_time
-        self.patch_freq = patch_freq
-        self.patch_dim = patch_time * patch_freq
-        self.proj = nn.Linear(self.patch_dim, d_model)
-
+        self.pt, self.pf = pt, pf
+        self.dim = pt * pf
+        self.proj = nn.Linear(self.dim, d_model)
     def forward(self, x):
-        B, T, F = x.shape
-        new_T = (T // self.patch_time) * self.patch_time
-        new_F = (F // self.patch_freq) * self.patch_freq
-        x = x[:, :new_T, :new_F]
-        nT = new_T // self.patch_time
-        nF = new_F // self.patch_freq
-        x = x.view(B, nT, self.patch_time, nF, self.patch_freq)
-        x = x.permute(0, 1, 3, 2, 4).contiguous()
-        x = x.view(B, nT*nF, self.patch_dim)
-        x = self.proj(x)
-        return x
+        B,T,F = x.shape
+        T0 = (T//self.pt)*self.pt
+        F0 = (F//self.pf)*self.pf
+        x = x[:,:T0,:F0]
+        nT, nF = T0//self.pt, F0//self.pf
+        x = x.view(B,nT,self.pt,nF,self.pf)
+        x = x.permute(0,1,3,2,4).contiguous().view(B,nT*nF,self.dim)
+        return self.proj(x)
 
 class TransformerEncoderWrapper(nn.Module):
-    def __init__(self, d_model, nhead, num_layers, dim_feedforward):
+    def __init__(self, d_model, nhead, nlayers, dim_ff):
         super().__init__()
-        enc_layer = nn.TransformerEncoderLayer(
-            d_model, nhead, dim_feedforward=dim_feedforward, batch_first=True
-        )
-        self.transformer = nn.TransformerEncoder(enc_layer, num_layers)
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
-        self.pos_embed = nn.Parameter(torch.zeros(1, 10000, d_model))
-
-    def forward(self, x_mel, x_art):
-        B, N_mel, _ = x_mel.shape
-        B, N_art, _ = x_art.shape
-        cls_tok = self.cls_token.repeat(B, 1, 1)
-        x_all = torch.cat([cls_tok, x_mel, x_art], dim=1)
-        seq_len = x_all.size(1)
-        x_all = x_all + self.pos_embed[:, :seq_len, :]
-        out = self.transformer(x_all)
-        cls_emb = out[:, 0, :]
-        tokens = out[:, 1:, :]
-        return cls_emb, tokens
+        layer = nn.TransformerEncoderLayer(d_model, nhead, dim_ff, batch_first=True)
+        self.transformer = nn.TransformerEncoder(layer, nlayers)
+        self.cls_token = nn.Parameter(torch.zeros(1,1,d_model))
+        self.pos_embed = nn.Parameter(torch.zeros(1,10000,d_model))
+    def forward(self, xm, xa):
+        B = xm.size(0)
+        cls = self.cls_token.repeat(B,1,1)
+        x = torch.cat([cls,xm,xa], dim=1)
+        L = x.size(1)
+        x = x + self.pos_embed[:,:L,:]
+        out = self.transformer(x)
+        return out[:,0], out[:,1:]
 
 class SegmentLevelSelfAttention(nn.Module):
-    def __init__(self, d_model, nhead=2, num_layers=2, dim_feedforward=256):
+    def __init__(self, d_model, nhead, nlayers, dim_ff):
         super().__init__()
-        enc_layer = nn.TransformerEncoderLayer(
-            d_model, nhead, dim_feedforward=dim_feedforward, batch_first=True
-        )
-        self.segment_encoder = nn.TransformerEncoder(enc_layer, num_layers)
-
-    def forward(self, enc_tokens):
-        B, N, D = enc_tokens.shape
-        seg_count = N // SEGMENT_SIZE
-        used_len = seg_count * SEGMENT_SIZE
-        tokens = enc_tokens[:, :used_len, :]
-        tokens = tokens.view(B, seg_count, SEGMENT_SIZE, D)
-        seg_emb = tokens.mean(dim=2)
-        seg_enc = self.segment_encoder(seg_emb)
-        seg_rep = seg_enc.mean(dim=1)
-        return seg_rep
+        layer = nn.TransformerEncoderLayer(d_model, nhead, dim_ff, batch_first=True)
+        self.segment_encoder = nn.TransformerEncoder(layer, nlayers)
+    def forward(self, tokens):
+        B,N,D = tokens.shape
+        c = N // SEGMENT_SIZE
+        t = tokens[:,:c*SEGMENT_SIZE,:].view(B,c,SEGMENT_SIZE,D)
+        e = t.mean(2)                    # [B, c, D]
+        out = self.segment_encoder(e)    # [B, c, D]
+        return out.mean(1)               # [B, D]
 
 class MultiTaskHeads(nn.Module):
     def __init__(self, d_model, num_classes):
@@ -175,128 +141,58 @@ class MultiTaskHeads(nn.Module):
             nn.ReLU(),
             nn.Linear(d_model//2, num_classes)
         )
-
     def forward(self, x):
-        logit_bin = self.bin_fc(x).squeeze(-1)
-        logit_multi = self.multi_fc(x)
-        return logit_bin, logit_multi
+        return self.bin_fc(x).squeeze(-1), self.multi_fc(x)
 
 class PatentTTSNet(nn.Module):
     def __init__(self):
         super().__init__()
-        self.mel_embed = PatchEmbed(D_MODEL, PATCH_TIME, PATCH_FREQ)
-        self.art_embed = PatchEmbed(D_MODEL, PATCH_TIME, PATCH_FREQ)
-        self.transformer_enc = TransformerEncoderWrapper(D_MODEL, NUM_HEADS, NUM_LAYERS, DIM_FEEDFORWARD)
-        self.segment_analyzer = SegmentLevelSelfAttention(D_MODEL, nhead=2, num_layers=NUM_SEGMENT_LAYERS, dim_feedforward=256)
-        self.heads = MultiTaskHeads(2 * D_MODEL, NUM_CLASSES)
+        self.mel_embed         = PatchEmbed(D_MODEL, PATCH_TIME, PATCH_FREQ)
+        self.art_embed         = PatchEmbed(D_MODEL, PATCH_TIME, PATCH_FREQ)
+        self.transformer_enc   = TransformerEncoderWrapper(D_MODEL, NUM_HEADS, NUM_LAYERS, DIM_FEEDFORWARD)
+        self.segment_analyzer  = SegmentLevelSelfAttention(D_MODEL, NUM_HEADS, NUM_SEGMENT_LAYERS, DIM_FEEDFORWARD//2)
+        self.heads             = MultiTaskHeads(2*D_MODEL, NUM_CLASSES)
+    def forward(self, mel, art):
+        xm       = self.mel_embed(mel)
+        xa       = self.art_embed(art)
+        cls, toks= self.transformer_enc(xm, xa)
+        seg      = self.segment_analyzer(toks)
+        return self.heads(torch.cat([cls, seg], dim=1))
 
-    def forward(self, mel_input, art_input):
-        x_mel = self.mel_embed(mel_input)
-        x_art = self.art_embed(art_input)
-        cls_emb, enc_tokens = self.transformer_enc(x_mel, x_art)
-        seg_rep = self.segment_analyzer(enc_tokens)
-        fused = torch.cat([cls_emb, seg_rep], dim=-1)
-        logit_bin, logit_multi = self.heads(fused)
-        return logit_bin, logit_multi
-
-def multi_task_loss(logit_bin, logit_multi, label_bin, label_multi):
-    loss_bin = F.binary_cross_entropy_with_logits(logit_bin, label_bin.float())
-    loss_multi = F.cross_entropy(logit_multi, label_multi)
-    return loss_bin + LAMBDA_ATTR * loss_multi, loss_bin.item(), loss_multi.item()
+# ========================= 4. Лосс и обучение =========================
+def multi_task_loss(logit_bin, logit_multi, lb_bin, lb_multi):
+    loss_bin   = F.binary_cross_entropy_with_logits(logit_bin, lb_bin)
+    loss_multi = F.cross_entropy(logit_multi, lb_multi)
+    return loss_bin + LAMBDA_ATTR * loss_multi
 
 def load_dataset():
-    class_map = [
-        ("original", 0),
-        ("synth_same_text", 1),
-        ("synth_random_text", 2),
-    ]
-    all_paths = []
-    all_labels = []
-    for subdir, cls_id in class_map:
-        folder = os.path.join("data", subdir)
-        files = glob(os.path.join(folder, "*.wav"))
-        all_paths.extend(files)
-        all_labels.extend([cls_id]*len(files))
-
-    train_paths, val_paths, train_labels, val_labels = train_test_split(
-        all_paths, all_labels, test_size=0.2, random_state=42, stratify=all_labels
-    )
-    return train_paths, val_paths, train_labels, val_labels
+    safe   = glob("data/safe/**/*.wav", recursive=True)
+    unsafe = glob("data/unsafe/**/*.wav", recursive=True)
+    paths  = safe + unsafe
+    labels = [0]*len(safe) + [1]*len(unsafe)
+    return train_test_split(paths, labels, test_size=0.2, random_state=42, stratify=labels)
 
 def train():
-    logger.info("Loading dataset...")
-    train_paths, val_paths, train_cls, val_cls = load_dataset()
-    logger.info(f"Train size: {len(train_paths)} | Val size: {len(val_paths)}")
+    tr_p, vl_p, tr_lbl, vl_lbl = load_dataset()
+    tr_ds = MultiTaskDataset(tr_p, tr_lbl)
+    vl_ds = MultiTaskDataset(vl_p, vl_lbl)
+    tr_ld = DataLoader(tr_ds, batch_size=BATCH_SIZE, shuffle=True, collate_fn=pad_collate_fn)
+    device= DEVICE
+    model = PatentTTSNet().to(device)
+    opt   = torch.optim.Adam(model.parameters(), lr=LR)
 
-    train_dataset = MultiTaskDataset(train_paths, train_cls)
-    val_dataset = MultiTaskDataset(val_paths, val_cls)
-
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=pad_collate_fn)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=pad_collate_fn)
-
-    model = PatentTTSNet().to(DEVICE)
-    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
-
-    logger.info("Starting training...")
     for epoch in range(1, EPOCHS+1):
         model.train()
-        total_train_loss = 0.0
-        total_samples = 0
-        train_pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{EPOCHS} [TRAIN]", unit="batch")
-        for mels, arts, lbl_bin, lbl_multi in train_pbar:
-            mels = mels.to(DEVICE)
-            arts = arts.to(DEVICE)
-            lbl_bin = lbl_bin.to(DEVICE)
-            lbl_multi = lbl_multi.to(DEVICE)
-
-            logit_bin, logit_multi = model(mels, arts)
-            loss, lb, lm = multi_task_loss(logit_bin, logit_multi, lbl_bin, lbl_multi)
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            bs = mels.size(0)
-            total_train_loss += loss.item() * bs
-            total_samples += bs
-
-            train_pbar.set_postfix({
-                "loss": f"{loss.item():.4f}",
-                "bin_loss": f"{lb:.4f}",
-                "mc_loss": f"{lm:.4f}"
-            })
-
-        avg_loss = total_train_loss / total_samples
-
-        model.eval()
-        total_val = 0
-        correct_bin = 0
-        correct_multi = 0
-        val_pbar = tqdm(val_loader, desc=f"Epoch {epoch}/{EPOCHS} [VAL]", unit="batch", leave=False)
-        with torch.no_grad():
-            for mels, arts, lbl_bin, lbl_multi in val_pbar:
-                mels = mels.to(DEVICE)
-                arts = arts.to(DEVICE)
-                lbl_bin = lbl_bin.to(DEVICE)
-                lbl_multi = lbl_multi.to(DEVICE)
-
-                logit_bin, logit_multi = model(mels, arts)
-                pred_bin = (torch.sigmoid(logit_bin) > 0.5).long()
-                pred_multi = logit_multi.argmax(dim=1)
-
-                correct_bin += (pred_bin == lbl_bin).sum().item()
-                correct_multi += (pred_multi == lbl_multi).sum().item()
-                total_val += lbl_bin.size(0)
-
-        bin_acc = correct_bin / total_val
-        mc_acc = correct_multi / total_val
-
-        logger.info(f"Epoch {epoch}/{EPOCHS} | Train Loss: {avg_loss:.4f} | Val BinAcc: {bin_acc:.3f} | Val MCAcc: {mc_acc:.3f}")
+        for mel, art, lb_bin, lb_multi in tqdm(tr_ld, desc=f"Epoch {epoch}"):
+            mel, art, lb_bin, lb_multi = mel.to(device), art.to(device), lb_bin.to(device), lb_multi.to(device)
+            logit_bin, logit_multi = model(mel, art)
+            loss = multi_task_loss(logit_bin, logit_multi, lb_bin, lb_multi)
+            opt.zero_grad(); loss.backward(); opt.step()
+        logger.info(f"Epoch {epoch} complete")
 
     os.makedirs("models", exist_ok=True)
-    model_path = "models/patent_tts_net.pth"
-    torch.save(model.state_dict(), model_path)
-    logger.info(f"Model saved to {model_path}")
+    torch.save(model.state_dict(), "models/patent_tts_net.pth")
+    logger.info("Model saved to models/patent_tts_net.pth")
 
 if __name__ == "__main__":
     train()
