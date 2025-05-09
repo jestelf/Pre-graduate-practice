@@ -1,0 +1,33 @@
+2025-05-08 14:10:56,439 | INFO | ======  Новая сессия обучения  ======
+2025-05-08 14:10:56,439 | INFO | Loading dataset…
+2025-05-08 14:10:56,540 | INFO | Saved class distribution → plots/class_distribution.png
+2025-05-08 14:10:58,125 | INFO | Saved sample mels → plots/sample_mels_and_artifacts.png
+2025-05-08 14:10:58,125 | INFO | Train=1636  Val=410 | distribution={'original': 682, 'synth_same_text': 682, 'synth_random_text': 682}
+2025-05-08 14:10:59,292 | INFO | Starting training…
+2025-05-08 14:13:00,145 | INFO | Epoch 1/10 | TrainLoss=1.5713 | ValBinAcc=0.807 | ValMcAcc=0.510
+2025-05-08 14:15:05,823 | INFO | Epoch 2/10 | TrainLoss=1.1057 | ValBinAcc=0.898 | ValMcAcc=0.588
+2025-05-08 14:17:11,082 | INFO | Epoch 3/10 | TrainLoss=0.9675 | ValBinAcc=0.866 | ValMcAcc=0.573
+2025-05-08 14:19:12,177 | INFO | Epoch 4/10 | TrainLoss=0.9565 | ValBinAcc=0.856 | ValMcAcc=0.551
+2025-05-08 14:21:12,802 | INFO | Epoch 5/10 | TrainLoss=0.9143 | ValBinAcc=0.927 | ValMcAcc=0.607
+2025-05-08 14:23:15,241 | INFO | Epoch 6/10 | TrainLoss=0.8459 | ValBinAcc=0.900 | ValMcAcc=0.583
+2025-05-08 14:25:16,729 | INFO | Epoch 7/10 | TrainLoss=0.8775 | ValBinAcc=0.944 | ValMcAcc=0.629
+2025-05-08 14:27:12,528 | INFO | Epoch 8/10 | TrainLoss=0.8012 | ValBinAcc=0.941 | ValMcAcc=0.639
+2025-05-08 14:29:01,565 | INFO | Epoch 9/10 | TrainLoss=0.7968 | ValBinAcc=0.951 | ValMcAcc=0.624
+2025-05-08 14:31:01,348 | INFO | Epoch 10/10 | TrainLoss=0.7934 | ValBinAcc=0.922 | ValMcAcc=0.622
+2025-05-08 14:31:01,458 | INFO | Saved train progress → plots/training_progress.png
+2025-05-08 14:31:01,458 | INFO | Running final evaluation…
+2025-05-08 14:31:10,159 | INFO | Binary metrics : {'accuracy': 0.9219512195121952, 'precision': 0.9583333333333334, 'recall': 0.9233576642335767, 'f1': 0.9405204460966543}
+2025-05-08 14:31:10,159 | INFO | Multiclass metrics: {'accuracy': 0.6219512195121951, 'precision': 0.6093311122659837, 'recall': 0.6227637040217547, 'f1': 0.6023240503879043}
+2025-05-08 14:31:10,233 | INFO | Saved ROC → plots/binary_roc_curve.png
+2025-05-08 14:31:10,312 | INFO | Saved PR curve → plots/precision_recall_curve.png
+2025-05-08 14:31:10,440 | INFO | Saved threshold opt → plots/threshold_optimization.png
+2025-05-08 14:31:10,441 | INFO | Best threshold=0.18, F1=0.950
+2025-05-08 14:31:10,530 | INFO | Saved confusion matrix → plots/binary_confusion_matrix.png
+2025-05-08 14:31:10,627 | INFO | Saved confusion matrix → plots/multi_class_confusion_matrix.png
+2025-05-08 14:31:10,717 | INFO | Saved error hist → plots/error_probability_distribution.png
+2025-05-08 14:31:10,740 | INFO | Generating resource report…
+2025-05-08 14:31:11,400 | INFO | Resource report saved.
+2025-05-08 14:31:11,582 | INFO | Saved GPU usage → plots/gpu_usage.png
+2025-05-08 14:31:11,583 | INFO | Evaluating noise robustness…
+2025-05-08 14:31:46,052 | INFO | Saved noise robustness → plots/noise_robustness.png
+2025-05-08 14:31:46,134 | INFO | Model saved → models/patent_tts_net.pth
