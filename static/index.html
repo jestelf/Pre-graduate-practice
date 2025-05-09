@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VoiceNet API Demo</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 2rem auto;
+      padding: 1rem;
+      line-height: 1.5;
+    }
+    h1, h2, h3 {
+      text-align: center;
+      margin-top: 1.5rem;
+    }
+    .info {
+      font-size: 0.9rem;
+      color: #555;
+      margin-bottom: 1rem;
+      text-align: center;
+    }
+    .field {
+      margin-bottom: 1rem;
+    }
+    label {
+      display: block;
+      margin-bottom: 0.4rem;
+      font-weight: bold;
+    }
+    input[type="text"],
+    input[type="file"],
+    textarea {
+      width: 100%;
+      padding: 0.5rem;
+      font-family: monospace;
+      box-sizing: border-box;
+    }
+    button {
+      display: block;
+      margin: 0.5rem auto 1rem;
+      padding: 0.6rem 1.2rem;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+    pre {
+      background: #f4f4f4;
+      padding: 1rem;
+      overflow-x: auto;
+      border-radius: 4px;
+    }
+    .code-block {
+      margin-bottom: 2rem;
+    }
+    .guide {
+      margin: 2rem 0;
+    }
+    code {
+      background: #eee;
+      padding: 0.2rem 0.4rem;
+      border-radius: 3px;
+      font-family: monospace;
+    }
+  </style>
+</head>
+<body>
+  <h1>VoiceNet API Demo</h1>
+  <p class="info">
+    Чтобы всё работало, в одном окне терминала запустите:
+    <br>
+    <code>uvicorn api:app --host 0.0.0.0 --port 7860 &amp;&amp; npx localtunnel --port 7860 --subdomain voicenet</code>
+  </p>
+
+  <!-- Форма загрузки одного файла -->
+  <div class="field">
+    <label for="apiUrl">API URL:</label>
+    <input type="text" id="apiUrl"
+      value="https://voicenet.loca.lt/predict?key=voicenet2024" />
+  </div>
+  <div class="field">
+    <label for="fileInput">Выберите аудиофайл (любой формат, ≤ 5 MB):</label>
+    <input type="file" id="fileInput" accept="audio/*" />
+  </div>
+  <button id="uploadBtn">Загрузить и классифицировать</button>
+
+  <h2>Результат:</h2>
+  <pre id="result">Здесь появятся результаты…</pre>
+
+  <h2>Текущий локалтуннель:</h2>
+  <pre id="tunnelInfo">Получение информации о туннеле…</pre>
+
+  <!-- Примеры кода -->
+  <h2>Примеры запросов</h2>
+
+  <div class="code-block">
+    <h3>1. Один файл через curl</h3>
+    <pre>curl -X POST "http://localhost:7860/predict?key=voicenet2024" \
+  -F "file=@/путь/к/вашему/audio.wav;type=audio/wav"</pre>
+  </div>
+
+  <div class="code-block">
+    <h3>2. Пакетная обработка папки на Python</h3>
+    <pre>import os
+import requests
+
+API_URL = "https://voicenet.loca.lt/predict?key=voicenet2024"
+
+def classify_file(path):
+    with open(path, 'rb') as f:
+        r = requests.post(API_URL, files={'file': f})
+    return r.json()
+
+folder = '/path/to/your/audio_folder'
+for fname in os.listdir(folder):
+    if fname.lower().endswith(('.wav','.mp3','.ogg','.flac')):
+        result = classify_file(os.path.join(folder, fname))
+        print(f"{fname} →", result)</pre>
+  </div>
+
+  <!-- Пояснительный гайд -->
+  <div class="guide">
+    <h2>Как это работает</h2>
+    <ol>
+      <li>
+        Отправьте POST-запрос на <code>/predict?key=ваш_ключ</code> с полем
+        <code>file</code> в формате <code>multipart/form-data</code>.
+      </li>
+      <li>
+        Сервер примет аудио (≤ 5 MB), рассчитает мел-спектрограмму и карту артефактов,
+        прогонит через модель и вернёт JSON:
+        <pre>{
+  "binary_prediction": "Real"|"Fake",
+  "binary_score": 0.013,
+  "binary_threshold": 0.18,
+  "multiclass_prediction": "original"|"synth_same_text"|"synth_random_text",
+  "multiclass_logits": [3.362, -1.738, -1.850],
+  "inference_time_ms": 54.7
+}</pre>
+      </li>
+      <li>
+        Используйте пример curl или скрипт на Python для интеграции
+        в ваши пайплайны или приложения.
+      </li>
+      <li>
+        Всё развёрнуто локально и доступно публично через
+        <code>https://voicenet.loca.lt/</code>.
+      </li>
+    </ol>
+  </div>
+
+  <script>
+    // Загрузка одного файла
+    document.getElementById('uploadBtn').onclick = async () => {
+      const url = document.getElementById('apiUrl').value;
+      const input = document.getElementById('fileInput');
+      if (!input.files.length) {
+        alert('Пожалуйста, выберите файл аудио.');
+        return;
+      }
+      const form = new FormData();
+      form.append('file', input.files[0]);
+      document.getElementById('result').textContent = 'Отправка…';
+
+      try {
+        const res = await fetch(url, { method: 'POST', body: form });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || JSON.stringify(data));
+        document.getElementById('result').textContent =
+          JSON.stringify(data, null, 2);
+      } catch (err) {
+        document.getElementById('result').textContent =
+          'Ошибка: ' + err.message;
+      }
+    };
+
+    // Получение текущего туннеля
+    (async () => {
+      try {
+        const r = await fetch('https://loca.lt/mytunnelpassword');
+        document.getElementById('tunnelInfo').textContent = await r.text();
+      } catch {
+        document.getElementById('tunnelInfo').textContent =
+          'Не удалось получить информацию о туннеле.';
+      }
+    })();
+  </script>
+</body>
+</html>
