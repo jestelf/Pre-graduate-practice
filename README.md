@@ -53,7 +53,7 @@
 
    git clone https://github.com/ВашаОрганизация/secure-voice-auth.git
    cd secure-voice-auth
-````
+
 
 2. Создать виртуальное окружение и установить зависимости:
 
@@ -61,7 +61,7 @@
    source venv/bin/activate   # или venv\Scripts\activate
    pip install --upgrade pip
    pip install -r requirements.txt
-   ```
+
 3. Разместить файл модели `model.pth` в папке `models/` (см. раздел [Обучение модели](#обучение-модели)).
 
 ---
@@ -72,14 +72,14 @@
 
 export FLASK_APP=app.py
 flask run --host=0.0.0.0 --port=5000
-```
+
 
 Пример запроса:
 
 curl -X POST http://localhost:5000/verify_voice \
      -H "Content-Type: audio/wav" \
      --data-binary @test.wav
-```
+
 
 Пример ответа:
 
@@ -87,7 +87,7 @@ curl -X POST http://localhost:5000/verify_voice \
   "is_fake": false,
   "confidence": 0.12
 }
-```
+
 
 * `is_fake`: `true` — синтетический голос; `false` — настоящий
 * `confidence`: вероятность синтетичности (0…1)
@@ -141,7 +141,7 @@ python train.py \
   --batch-size 4 \
   --lr 1e-4 \
   --save-dir models/
-```
+
 
 * Оптимизатор: Adam (lr=1e-4)
 * Функция потерь: `BCEWithLogitsLoss`
@@ -167,14 +167,14 @@ python train.py \
 
 Рекомендуется контейнеризация:
 
-```Dockerfile
+
 FROM python:3.10-slim
 WORKDIR /app
 COPY . .
 RUN pip install --no-cache-dir -r requirements.txt
 EXPOSE 5000
 CMD ["flask", "run", "--host=0.0.0.0", "--port=5000"]
-```
+
 
 * Сборка: `docker build -t secure-voice-auth .`
 * Запуск: `docker run -d -p 5000:5000 secure-voice-auth`
