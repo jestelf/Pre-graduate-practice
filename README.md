@@ -50,14 +50,13 @@
 ## Установка
 
 1. Клонировать репозиторий:
-   ```bash
+
    git clone https://github.com/ВашаОрганизация/secure-voice-auth.git
    cd secure-voice-auth
 ````
 
 2. Создать виртуальное окружение и установить зависимости:
 
-   ```bash
    python3 -m venv venv
    source venv/bin/activate   # или venv\Scripts\activate
    pip install --upgrade pip
@@ -71,14 +70,12 @@
 
 Запустить сервис:
 
-```bash
 export FLASK_APP=app.py
 flask run --host=0.0.0.0 --port=5000
 ```
 
 Пример запроса:
 
-```bash
 curl -X POST http://localhost:5000/verify_voice \
      -H "Content-Type: audio/wav" \
      --data-binary @test.wav
@@ -86,7 +83,6 @@ curl -X POST http://localhost:5000/verify_voice \
 
 Пример ответа:
 
-```json
 {
   "is_fake": false,
   "confidence": 0.12
@@ -139,7 +135,6 @@ curl -X POST http://localhost:5000/verify_voice \
 
 ## Обучение модели
 
-```bash
 python train.py \
   --data-dir data/ \
   --epochs 10 \
